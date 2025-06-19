@@ -10,7 +10,6 @@ from datetime import datetime
     Keymap
     - 'q': Quit the application
     - 'f': Flip the camera feed horizontally
-    - 'm': Toggle between face mesh and rectangle detection
     - 'd': Toggle diagnostics display
     - 'space': Capture n photos of detected faces
 '''
@@ -23,7 +22,7 @@ display_diagnostic = {
 }
 
 CAPTURES_DIR = "captures"
-CAPTURE_PADDING = 0.25 
+CAPTURE_PADDING = 0.4
 NUM_CAPTURES = 5
 CAPTURE_INTERVAL_SECONDS = 0.2
 
@@ -40,8 +39,6 @@ palette = { # Reversed for OpenCV
     'YELLOW': (10, 202, 255),
 }
 
-face_mesh_enabled = True
-
 if not os.path.exists(CAPTURES_DIR):
     os.makedirs(CAPTURES_DIR)
 
@@ -53,9 +50,6 @@ face_mesh_instance = mp_face_mesh.FaceMesh(
 )
 mp_drawing = mp.solutions.drawing_utils
 mesh_drawing_spec = mp_drawing.DrawingSpec(color=palette['WHITE'], thickness=1)
-
-face_cascade_path = os.path.join(cv2.data.haarcascades, 'haarcascade_frontalface_default.xml')
-face_cascade = cv2.CascadeClassifier(face_cascade_path)
 
 video_capture = cv2.VideoCapture(0)
 
@@ -87,8 +81,6 @@ while True:
         break
     elif key == ord('f'):
         MIRROR_FRAME = not MIRROR_FRAME
-    elif key == ord('m'):
-        face_mesh_enabled = not face_mesh_enabled
     elif key == ord('d'):
         SHOW_DIAGNOSTICS = not SHOW_DIAGNOSTICS
     elif key == 32:
@@ -102,25 +94,30 @@ while True:
         current_time = time.time()
         if captures_left > 0 and (current_time - last_capture_time >= CAPTURE_INTERVAL_SECONDS):
             clean_frame_for_capture = clean_frame.copy()
+            
+            results_capture = face_mesh_instance.process(cv2.cvtColor(clean_frame_for_capture, cv2.COLOR_BGR2RGB))
 
-            gray_for_capture = cv2.cvtColor(clean_frame_for_capture, cv2.COLOR_BGR2GRAY)
-            faces_to_capture = face_cascade.detectMultiScale(
-                gray_for_capture,
-                scaleFactor=1.1,
-                minNeighbors=5,
-                minSize=(40, 40)
-            )
-
-            if len(faces_to_capture) > 0:
-                for (x, y, w, h) in faces_to_capture:
+            if results_capture.multi_face_landmarks:
+                for face_landmarks in results_capture.multi_face_landmarks:
                     face_capture_count += 1
-                    pad_w = int(w * CAPTURE_PADDING)
-                    pad_h = int(h * CAPTURE_PADDING)
                     
-                    y1 = max(0, y - pad_h)
-                    y2 = min(clean_frame_for_capture.shape[0], y + h + pad_h)
-                    x1 = max(0, x - pad_w)
-                    x2 = min(clean_frame_for_capture.shape[1], x + w + pad_w)
+                    h, w, _ = clean_frame_for_capture.shape
+                    x_coords = [landmark.x for landmark in face_landmarks.landmark]
+                    y_coords = [landmark.y for landmark in face_landmarks.landmark]
+                    
+                    x_min, x_max = min(x_coords), max(x_coords)
+                    y_min, y_max = min(y_coords), max(y_coords)
+
+                    box_x, box_y = int(x_min * w), int(y_min * h)
+                    box_w, box_h = int((x_max - x_min) * w), int((y_max - y_min) * h)
+
+                    pad_w = int(box_w * CAPTURE_PADDING)
+                    pad_h = int(box_h * CAPTURE_PADDING)
+                    
+                    y1 = max(0, box_y - pad_h)
+                    y2 = min(h, box_y + box_h + pad_h)
+                    x1 = max(0, box_x - pad_w)
+                    x2 = min(w, box_x + box_w + pad_w)
 
                     face_img = clean_frame_for_capture[y1:y2, x1:x2]
                     filename = os.path.join(session_dir, f"face_{face_capture_count}.png")
@@ -139,34 +136,16 @@ while True:
     if MIRROR_FRAME:
         frame = cv2.flip(frame, 1)
 
-    if face_mesh_enabled:
-        results = face_mesh_instance.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        if results.multi_face_landmarks:
-            for face_landmarks in results.multi_face_landmarks:
-                mp_drawing.draw_landmarks(
-                    image=frame,
-                    landmark_list=face_landmarks,
-                    connections=mp_face_mesh.FACEMESH_TESSELATION,
-                    landmark_drawing_spec=None,
-                    connection_drawing_spec=mesh_drawing_spec
-                )
-                # mp_drawing.draw_landmarks(
-                #     image=frame,
-                #     landmark_list=face_landmarks,
-                #     connections=mp_face_mesh.FACEMESH_CONTOURS,
-                #     landmark_drawing_spec=None,
-                #     connection_drawing_spec=mesh_drawing_spec
-                # )
-    else:
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = face_cascade.detectMultiScale(
-            gray,
-            scaleFactor=1.1,
-            minNeighbors=5,
-            minSize=(30, 30)
-        )
-        for (x, y, w, h) in faces:
-            cv2.rectangle(frame, (x, y), (x + w, y + h), palette['WHITE'], 2)
+    results = face_mesh_instance.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    if results.multi_face_landmarks:
+        for face_landmarks in results.multi_face_landmarks:
+            mp_drawing.draw_landmarks(
+                image=frame,
+                landmark_list=face_landmarks,
+                connections=mp_face_mesh.FACEMESH_TESSELATION,
+                landmark_drawing_spec=None,
+                connection_drawing_spec=mesh_drawing_spec
+            )
 
     height, width, _ = frame.shape
 
