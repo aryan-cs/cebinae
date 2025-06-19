@@ -15,6 +15,7 @@ from datetime import datetime
 '''
 
 MIRROR_FRAME = True
+MIRROR_CAPTURE = True
 SHOW_DIAGNOSTICS = True
 display_diagnostic = {
     "FPS": True,
@@ -22,7 +23,7 @@ display_diagnostic = {
 }
 
 CAPTURES_DIR = "captures"
-CAPTURE_PADDING = 0.4
+CAPTURE_PADDING = 0.5
 NUM_CAPTURES = 5
 CAPTURE_INTERVAL_SECONDS = 0.2
 
@@ -96,7 +97,8 @@ while True:
             clean_frame_for_capture = clean_frame.copy()
             
             results_capture = face_mesh_instance.process(cv2.cvtColor(clean_frame_for_capture, cv2.COLOR_BGR2RGB))
-
+            if MIRROR_CAPTURE:
+                clean_frame_for_capture = cv2.flip(clean_frame_for_capture, 1)
             if results_capture.multi_face_landmarks:
                 for face_landmarks in results_capture.multi_face_landmarks:
                     face_capture_count += 1
