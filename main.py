@@ -4,21 +4,33 @@ import psutil
 from collections import deque
 import os
 import mediapipe as mp
+from datetime import datetime
 
 '''
-Keymap
-- 'q': Quit the application
-- 'f': Flip the camera feed horizontally
-- 'm': Toggle between face mesh and rectangle detection
-- 'd': Toggle diagnostics display
+    Keymap
+    - 'q': Quit the application
+    - 'f': Flip the camera feed horizontally
+    - 'm': Toggle between face mesh and rectangle detection
+    - 'd': Toggle diagnostics display
+    - 'space': Capture n photos of detected faces
 '''
 
-mirror_frame = True
-master_diagnostics_enabled = True
-show_diagnostics = {
+MIRROR_FRAME = True
+SHOW_DIAGNOSTICS = True
+display_diagnostic = {
     "FPS": True,
     "CPU": True
 }
+
+CAPTURES_DIR = "captures"
+CAPTURE_PADDING = 0.25 
+NUM_CAPTURES = 5
+CAPTURE_INTERVAL_SECONDS = 0.2
+
+is_capturing = False
+captures_left = 0
+last_capture_time = 0
+
 palette = { # Reversed for OpenCV
     'WHITE': (255, 255, 255),
     'BLACK': (0, 0, 0),
@@ -29,6 +41,9 @@ palette = { # Reversed for OpenCV
 }
 
 face_mesh_enabled = True
+
+if not os.path.exists(CAPTURES_DIR):
+    os.makedirs(CAPTURES_DIR)
 
 mp_face_mesh = mp.solutions.face_mesh
 face_mesh_instance = mp_face_mesh.FaceMesh(
@@ -44,7 +59,13 @@ face_cascade = cv2.CascadeClassifier(face_cascade_path)
 
 video_capture = cv2.VideoCapture(0)
 
-# print("Showing camera feed. Press 'q' to quit, 'f' to flip, 'm' for mesh/rect, 'd' for diagnostics.")
+timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+session_dir = os.path.join(CAPTURES_DIR, timestamp)
+os.makedirs(session_dir)
+face_capture_count = 0
+
+# print(f"Capture session started. Saving to: {session_dir}")
+# print("Press 'q' to quit, 'f' to flip, 'm' for mesh/rect, 'd' for diagnostics, SPACE to capture.")
 
 fps_buffer = deque(maxlen=60)
 
@@ -59,17 +80,63 @@ while True:
         print("Failed to grab frame.")
         break
 
+    clean_frame = frame.copy()
+
     key = cv2.waitKey(1) & 0xFF
     if key == ord('q'):
         break
     elif key == ord('f'):
-        mirror_frame = not mirror_frame
+        MIRROR_FRAME = not MIRROR_FRAME
     elif key == ord('m'):
         face_mesh_enabled = not face_mesh_enabled
     elif key == ord('d'):
-        master_diagnostics_enabled = not master_diagnostics_enabled
+        SHOW_DIAGNOSTICS = not SHOW_DIAGNOSTICS
+    elif key == 32:
+        if not is_capturing:
+            is_capturing = True
+            captures_left = NUM_CAPTURES
+            last_capture_time = 0
+            print(f"Starting capture of {NUM_CAPTURES} photos...")
 
-    if mirror_frame:
+    if is_capturing:
+        current_time = time.time()
+        if captures_left > 0 and (current_time - last_capture_time >= CAPTURE_INTERVAL_SECONDS):
+            clean_frame_for_capture = clean_frame.copy()
+
+            gray_for_capture = cv2.cvtColor(clean_frame_for_capture, cv2.COLOR_BGR2GRAY)
+            faces_to_capture = face_cascade.detectMultiScale(
+                gray_for_capture,
+                scaleFactor=1.1,
+                minNeighbors=5,
+                minSize=(40, 40)
+            )
+
+            if len(faces_to_capture) > 0:
+                for (x, y, w, h) in faces_to_capture:
+                    face_capture_count += 1
+                    pad_w = int(w * CAPTURE_PADDING)
+                    pad_h = int(h * CAPTURE_PADDING)
+                    
+                    y1 = max(0, y - pad_h)
+                    y2 = min(clean_frame_for_capture.shape[0], y + h + pad_h)
+                    x1 = max(0, x - pad_w)
+                    x2 = min(clean_frame_for_capture.shape[1], x + w + pad_w)
+
+                    face_img = clean_frame_for_capture[y1:y2, x1:x2]
+                    filename = os.path.join(session_dir, f"face_{face_capture_count}.png")
+                    cv2.imwrite(filename, face_img)
+                    print(f"Saved photo to {filename} ({NUM_CAPTURES - captures_left + 1}/{NUM_CAPTURES})")
+            else:
+                print(f"Capture {NUM_CAPTURES - captures_left + 1}/{NUM_CAPTURES}: No face detected.")
+
+            captures_left -= 1
+            last_capture_time = current_time
+
+            if captures_left == 0:
+                is_capturing = False
+                print("Capture sequence finished.")
+
+    if MIRROR_FRAME:
         frame = cv2.flip(frame, 1)
 
     if face_mesh_enabled:
@@ -103,7 +170,7 @@ while True:
 
     height, width, _ = frame.shape
 
-    if master_diagnostics_enabled:
+    if SHOW_DIAGNOSTICS:
         current_time = time.time()
         fps_buffer.append(current_time)
 
@@ -111,7 +178,7 @@ while True:
             last_update_time = current_time
             diagnostics_to_show = []
 
-            if show_diagnostics["FPS"]:
+            if display_diagnostic["FPS"]:
                 fps = 0
                 if len(fps_buffer) > 1:
                     time_diff = fps_buffer[-1] - fps_buffer[0]
@@ -119,7 +186,7 @@ while True:
                         fps = (len(fps_buffer) - 1) / time_diff
                 diagnostics_to_show.append(f"FPS: {fps:.0f}")
 
-            if show_diagnostics["CPU"]:
+            if display_diagnostic["CPU"]:
                 cpu_usage = psutil.cpu_percent()
                 diagnostics_to_show.append(f"CPU: {cpu_usage:.0f}%")
             
